@@ -925,10 +925,6 @@ def testSidebarRenameNodeOpensDialog(tempDir, mainWindow, kind, data, dialogPatt
     findQDialog(rw, dialogPattern).reject()
 
 
-# Not run because the failure happens in the Qt event loop and leaves an error
-# message box open, which can't be reported as a regular xfail.
-@pytest.mark.xfail(run=False, reason="Sidebar.wantRenameNode passes the full refname (refs/remotes/...) "
-                                     "to RenameRemoteBranch, which expects a remote branch shorthand")
 def testSidebarRenameRemoteBranchWithF2(tempDir, mainWindow):
     wd = unpackRepo(tempDir)
     rw = mainWindow.openRepo(wd)

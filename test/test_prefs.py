@@ -541,11 +541,13 @@ def testPrefsFileEncodeDecodeValue(value):
     assert type(decoded) is type(value)
 
 
-@pytest.mark.xfail(reason="PrefsFile.decodeSignature raises KeyError (not ValueError) on missing keys, "
-                          "which escapes PrefsFile.load()", raises=KeyError, strict=True)
-def testPrefsFileLoadSignatureMissingKeys(tempDir):
+@pytest.mark.parametrize("signature", [
+    {"name": "Toto"},
+    {"name": "Toto", "email": "toto@example.com", "time": None, "offset": 0},
+])
+def testPrefsFileLoadSignatureMissingKeys(tempDir, signature):
     prefs = _makeSamplePrefs(tempDir, json.dumps({
-        "mySignature": {"name": "Toto"},
+        "mySignature": signature,
         "myInt": 3,
     }))
     assert prefs.load()
@@ -553,17 +555,23 @@ def testPrefsFileLoadSignatureMissingKeys(tempDir):
     assert prefs.myInt == 3
 
 
-@pytest.mark.xfail(reason="PrefsFile.decode doesn't validate plain types (int/str/bool/list/dict)", strict=True)
-def testPrefsFileLoadPlainTypeMismatch(tempDir):
+@pytest.mark.parametrize("myInt", ["not an int", True, 1.5])
+def testPrefsFileLoadPlainTypeMismatch(tempDir, myInt):
     prefs = _makeSamplePrefs(tempDir, json.dumps({
-        "myInt": "not an int",
+        "myInt": myInt,
         "myBool": "yes",
         "myStr": 123,
+        "myList": "not a list",
+        "myDict": ["not", "a", "dict"],
+        "myOptionalInt": "nope",
     }))
     assert prefs.load()
     assert prefs.myInt == 42
     assert prefs.myBool is True
     assert prefs.myStr == "hello"
+    assert prefs.myList == []
+    assert prefs.myDict == {}
+    assert prefs.myOptionalInt is None
 
 
 def testRepoPrefsCorruptFile(tempDir, mainWindow):
@@ -577,8 +585,12 @@ def testRepoPrefsCorruptFile(tempDir, mainWindow):
         "draftCommitMessage": "hello",
         "sortTags": "bogus",
         "hidePatterns": "bogus",
+        "draftCommitSignature": {"name": "missing email, time, offset"},
+        "draftAmendMessage": 123,
         "unknownKey": 1,
     }))
     rw = mainWindow.openRepo(wd)
     assert rw.repoModel.prefs.draftCommitMessage == "hello"
     assert rw.repoModel.prefs.hidePatterns == set()
+    assert rw.repoModel.prefs.draftCommitSignature is None
+    assert rw.repoModel.prefs.draftAmendMessage == ""
