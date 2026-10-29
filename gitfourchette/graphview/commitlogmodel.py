@@ -25,6 +25,8 @@ class CommitToolTipZone:
     right: int
     kind: Literal['ref', 'author', 'message', 'pathspec']
     data: str = ""
+    refs: tuple[str, ...] = ()
+    "Refs hidden behind a collapsed refbox (if any)."
 
 
 class SpecialRow(enum.IntEnum):
@@ -177,6 +179,9 @@ class CommitLogModel(QAbstractListModel):
             return tip
 
         return None
+
+    def getToolTipZones(self, row: int) -> list[CommitToolTipZone]:
+        return self._toolTipZones.get(row, [])
 
     def setData(self, index, value, role=None):
         if role == CommitLogModel.Role.AuthorColumnX:

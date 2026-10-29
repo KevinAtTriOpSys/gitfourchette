@@ -60,6 +60,11 @@ ELISION = " […]"
 ELISION_LENGTH = len(ELISION)
 
 
+def formatRefToolTip(refs: tuple[str, ...] | list[str]) -> str:
+    # Use preformatted whitespace to keep long ref names from wrapping.
+    return "<p style='white-space: pre'>" + "<br>".join(escape(refName) for refName in refs) + "</p>"
+
+
 MAX_AUTHOR_CHARS = {
     AuthorDisplayStyle.Initials: 7,
     AuthorDisplayStyle.FullName: 20,
@@ -93,6 +98,7 @@ class CommitLogDelegate(QStyledItemDelegate):
         self.authorMaxWidth = 0
         self.refsColumnWidth = 0
         self.refsColumnWidthKey = None
+        self.refPillImageCache: dict[int, str] = {}
         self.activeCommitFont = QFont()
         self.uncommittedFont = QFont()
         self.refboxFont = QFont()
@@ -125,6 +131,7 @@ class CommitLogDelegate(QStyledItemDelegate):
 
         self.mustRefreshMetrics = False
         self.refsColumnWidthKey = None
+        self.refPillImageCache.clear()
 
         self.hashCharWidth = max(option.fontMetrics.horizontalAdvance(c) for c in "0123456789abcdef")
 
@@ -424,87 +431,60 @@ class CommitLogDelegate(QStyledItemDelegate):
     # --------------------------------------------------------------------------
     # Refbox painting
 
-    def _paintRefboxes(self, painter: QPainter, rect: QRect, refs: list[str]):
+    def _visibleRefs(self, refs: list[str]) -> list[str]:
+        hiddenRefs = self.repoModel.hiddenRefs
+        return [
+            refName for refName in refs
+            if not (refName == "HEAD" and not self.repoModel.headIsDetached)
+            and not (refName in hiddenRefs
+                     and refName.startswith("refs/")
+                     and not refName.startswith(RefPrefix.TAGS))
+        ]
+
+    def _arrangeRefs(self, refs: list[str]) -> tuple[str | None, list[str]]:
+        """Pick the ref to display when a commit has several refs.
+
+        Returns the ref with the highest priority, followed by the collapsed refs.
+        """
+
         repoModel = self.repoModel
-        homeBranch = RefPrefix.HEADS + repoModel.homeBranch
-        xMax = painter.clipBoundingRect().right()
+        homeBranch = RefPrefix.HEADS + repoModel.homeBranch if repoModel.homeBranch else ""
 
-        # Group refs in clusters (branches with same upstream)
-        clusters: dict[str, list[str]] = {}
-        nonLooseRefs = set()
-        for refName in refs:
-            # Skip refboxes for hidden refs
-            if refName in repoModel.hiddenRefs:
-                continue
+        visibleRefs = self._visibleRefs(refs)
+        if not visibleRefs:
+            return None, []
 
-            # Look for local branches
-            if not refName.startswith(RefPrefix.HEADS):
-                continue
-            localName = refName.removeprefix(RefPrefix.HEADS)
+        def priority(refName: str) -> int:
+            # Current working branch
+            if refName == homeBranch or (refName == "HEAD" and repoModel.headIsDetached):
+                return 0
+            if refName.startswith(RefPrefix.HEADS):
+                return 1
+            if refName.startswith(RefPrefix.REMOTES):
+                return 2
+            if refName.startswith(RefPrefix.TAGS):
+                return 3
+            return 4
 
-            # Find the upstream for this local branch
-            try:
-                upstreamShorthand = repoModel.upstreams[localName]
-                assert not upstreamShorthand.startswith(RefPrefix.REMOTES)
-                upstreamRef = RefPrefix.REMOTES + upstreamShorthand
-            except KeyError:
-                continue
+        # Python's sort is stable, so refs keep their original order within a category
+        visibleRefs.sort(key=priority)
+        return visibleRefs[0], visibleRefs[1:]
 
-            # Don't create a cluster if the upstream isn't on the same row
-            if upstreamRef not in refs:
-                continue
+    def _paintRefboxes(self, painter: QPainter, rect: QRect, refs: list[str], inColumn: bool = False):
+        primaryRef, collapsedRefs = self._arrangeRefs(refs)
+        if primaryRef is None:
+            return
 
-            # Don't create a cluster if the upstream is hidden
-            if upstreamRef in repoModel.hiddenRefs:
-                continue
+        homeBranch = RefPrefix.HEADS + self.repoModel.homeBranch
+        tooltip = formatRefToolTip((primaryRef, *collapsedRefs))
 
-            # Append to the cluster
-            try:
-                clusters[upstreamRef].append(refName)
-            except KeyError:
-                clusters[upstreamRef] = [refName]
-
-            nonLooseRefs.add(upstreamRef)
-            nonLooseRefs.add(refName)
-
-        # Draw clusters first
-        for upstreamRef, localRefList in clusters.items():
-            # See if we can omit the name of the remote branch
-            if repoModel.singleRemote and len(localRefList) == 1:
-                assert upstreamRef.startswith(RefPrefix.REMOTES)
-                upstreamShorthand = upstreamRef.removeprefix(RefPrefix.REMOTES)
-                _remoteName, remoteBranchName = split_remote_branch_shorthand(upstreamShorthand)
-                _localBranchPrefix, localBranchName = RefPrefix.split(localRefList[0])
-                omitRemoteName = remoteBranchName == localBranchName
-            else:
-                omitRemoteName = False
-
-            # Draw local branches
-            for i, localRef in enumerate(localRefList):
-                self._paintRefbox(painter, rect, localRef, clipLeft=i != 0, clipRight=True, isHome=localRef == homeBranch)
-
-            # Draw upstream at end of cluster
-            self._paintRefbox(painter, rect, upstreamRef, clipLeft=True, forceOmitName=omitRemoteName)
-
-            if rect.left() >= xMax:
-                return
-
-        # Draw loose refs
-        for refName in refs:
-            # Skip refboxes for hidden refs (except tags and special refs)
-            if (refName in repoModel.hiddenRefs
-                    and refName.startswith("refs/")
-                    and not refName.startswith(RefPrefix.TAGS)):
-                continue
-
-            # Skip clustered refs we've drawn above
-            if refName in nonLooseRefs:
-                continue
-
-            self._paintRefbox(painter, rect, refName, isHome=refName == homeBranch)
-
-            if rect.left() >= xMax:
-                return
+        self._paintRefbox(
+            painter, rect, primaryRef,
+            isHome=primaryRef == homeBranch,
+            forceToolTip=tooltip if collapsedRefs else "",
+            collapsedCount=len(collapsedRefs),
+            collapsedRefs=tuple(collapsedRefs),
+            inColumn=inColumn)
 
     def _paintRefbox(
             self,
@@ -516,6 +496,10 @@ class CommitLogDelegate(QStyledItemDelegate):
             clipRight: bool = False,
             forceOmitName: bool = False,
             forceToolTip: str | None = "",
+            collapsedCount: int = 0,
+            collapsedRefs: tuple[str, ...] = (),
+            inColumn: bool = False,
+            fullText: bool = False,
     ):
         if refName == 'HEAD' and not self.repoModel.headIsDetached:
             return
@@ -554,6 +538,9 @@ class CommitLogDelegate(QStyledItemDelegate):
         else:
             font = self.refboxFont
 
+        if collapsedCount > 0:
+            text += f" +{collapsedCount}"
+
         painter.setFont(font)
         painter.setPen(color)
 
@@ -566,15 +553,19 @@ class CommitLogDelegate(QStyledItemDelegate):
             lPadding -= 1
 
         # Determine max width
-        maxWidth = int(settings.prefs.refBoxMaxWidth)
         remainingWidth = rect.width()
-        if remainingWidth < 150:  # Super cramped
-            maxWidth = 0  # Draw icon only
-        maxWidth = min(remainingWidth, maxWidth)
+        if fullText:
+            maxWidth = math.ceil(QFontMetricsF(font).horizontalAdvance(text))
+            maxWidth = min(remainingWidth, maxWidth)
+        else:
+            maxWidth = int(settings.prefs.refBoxMaxWidth)
+            if remainingWidth < 150 and not inColumn:  # Super cramped
+                maxWidth = 0  # Draw icon only
+            maxWidth = min(remainingWidth, maxWidth)
 
-        # Text-only refbox: show text regardless of the user's preference
-        if not iconName and text:
-            maxWidth = max(maxWidth, remainingWidth)
+            # Text-only refbox: show text regardless of the user's preference
+            if not iconName and text:
+                maxWidth = max(maxWidth, remainingWidth)
 
         # Draw text
         if text and maxWidth != 0:
@@ -662,7 +653,7 @@ class CommitLogDelegate(QStyledItemDelegate):
         # Append tooltip
         if forceToolTip is not None:
             toolTipText = forceToolTip or refName
-            zone = CommitToolTipZone(rect.left(), boxRect.right(), "ref", toolTipText)
+            zone = CommitToolTipZone(rect.left(), boxRect.right(), "ref", toolTipText, collapsedRefs)
             self.newToolTipZone(zone)
 
         # Advance caller rectangle
@@ -825,15 +816,13 @@ class CommitLogDelegate(QStyledItemDelegate):
 
         width = 0
         for refs in repoModel.refsAt.values():
-            rowWidth = 0
-            for refName in refs:
-                # Match _paintRefboxes: skip hidden refs (except tags)
-                if (refName in repoModel.hiddenRefs
-                        and refName.startswith("refs/")
-                        and not refName.startswith(RefPrefix.TAGS)):
-                    continue
-                rowWidth += self._measureRefboxWidth(refName, isHome=refName == homeBranch)
-            width = max(width, rowWidth)
+            primaryRef, collapsedRefs = self._arrangeRefs(refs)
+            if primaryRef is None:
+                continue
+            width = max(width, self._measureRefboxWidth(
+                primaryRef,
+                isHome=primaryRef == homeBranch,
+                collapsedCount=len(collapsedRefs)))
 
         # Special refboxes may appear on any row, even if the commit has no refs
         parent = self.parent()
@@ -844,7 +833,13 @@ class CommitLogDelegate(QStyledItemDelegate):
 
         return width
 
-    def _measureRefboxWidth(self, refName: str, isHome: bool = False) -> int:
+    def _measureRefboxWidth(
+            self,
+            refName: str,
+            isHome: bool = False,
+            collapsedCount: int = 0,
+            fullText: bool = False,
+    ) -> int:
         """Approximate the width that _paintRefbox will use for a single ref."""
         if refName == "HEAD" and not self.repoModel.headIsDetached:
             return 0
@@ -866,6 +861,9 @@ class CommitLogDelegate(QStyledItemDelegate):
         else:
             font = self.refboxFont
 
+        if collapsedCount > 0:
+            text += f" +{collapsedCount}"
+
         lPadding = 4
         rPadding = 4
         iconWidth = 0
@@ -875,17 +873,65 @@ class CommitLogDelegate(QStyledItemDelegate):
             iconWidth = refboxDef.iconWidth
             iconPadding = 2
 
-        maxWidth = int(settings.prefs.refBoxMaxWidth)
-        if not text or (iconName and maxWidth == 0):
-            textWidth = -rPadding
-        elif not iconName:
-            # Text-only refboxes aren't capped by the refbox width preference
-            textWidth = math.ceil(QFontMetricsF(font).horizontalAdvance(text))
+        if fullText:
+            textWidth = math.ceil(QFontMetricsF(font).horizontalAdvance(text)) if text else -rPadding
         else:
-            textWidth = min(math.ceil(QFontMetricsF(font).horizontalAdvance(text)), maxWidth)
+            maxWidth = int(settings.prefs.refBoxMaxWidth)
+            if not text or (iconName and maxWidth == 0):
+                textWidth = -rPadding
+            elif not iconName:
+                # Text-only refboxes aren't capped by the refbox width preference
+                textWidth = math.ceil(QFontMetricsF(font).horizontalAdvance(text))
+            else:
+                textWidth = min(math.ceil(QFontMetricsF(font).horizontalAdvance(text)), maxWidth)
 
         # Include the gap that _paintRefbox leaves after each box
         return lPadding + iconWidth + iconPadding + textWidth + rPadding + 6
+
+    def formatRefPills(self, refs: tuple[str, ...] | list[str]) -> str:
+        """Format refs as a vertical list of pill images, like in the commit log."""
+        tags = [self._makeRefPillImageTag(refName) for refName in refs]
+        return "<p style='white-space: pre'>" + "<br>".join(tags) + "</p>"
+
+    def _makeRefPillImageTag(self, refName: str) -> str:
+        repoModel = self.repoModel
+        homeBranch = RefPrefix.HEADS + repoModel.homeBranch if repoModel.homeBranch else ""
+        isHome = refName == homeBranch
+        width = max(1, self._measureRefboxWidth(refName, isHome=isHome, fullText=True) - 6)
+
+        if isHome or (refName == "HEAD" and repoModel.headIsDetached):
+            font = self.homeRefboxFont
+        else:
+            font = self.refboxFont
+        height = max(16, math.ceil(QFontMetricsF(font).height()) + 8)
+
+        parent = self.parent()
+        dpr = parent.devicePixelRatioF() if isinstance(parent, QWidget) else 1.0
+        penColor = QApplication.palette().toolTipText().color()
+
+        key = hash((refName, isHome, dpr, font.toString(), penColor.name(QColor.NameFormat.HexArgb),
+                    repoModel.singleRemote, repoModel.headIsDetached))
+        try:
+            src = self.refPillImageCache[key]
+        except KeyError:
+            pixmap = QPixmap(round(width * dpr), round(height * dpr))
+            pixmap.setDevicePixelRatio(dpr)
+            pixmap.fill(Qt.GlobalColor.transparent)
+
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(penColor)
+            self._paintRefbox(
+                painter, QRect(0, 0, width, height), refName,
+                isHome=isHome, forceToolTip=None, inColumn=True, fullText=True)
+            painter.end()
+
+            src = f"{qTempDir()}/refpill-{key & 0xFFFFFFFF:x}.png"
+            pixmap.save(src)
+            self.refPillImageCache[key] = src
+
+        return (f"<img src='{src}' width={width} height={height} "
+                f"alt='{escape(refName)}' style='vertical-align: middle;'/>")
 
     def _paintRefs(
             self,
@@ -893,6 +939,7 @@ class CommitLogDelegate(QStyledItemDelegate):
             index: QModelIndex,
             rect: QRect,
             oid: Oid | None,
+            inColumn: bool = False,
     ):
         painter.save()
         painter.setClipRect(rect)
@@ -911,7 +958,7 @@ class CommitLogDelegate(QStyledItemDelegate):
         # ------ Actual refs
         refsHere = self.repoModel.refsAt.get(oid, None)
         if refsHere:
-            self._paintRefboxes(painter, rect, refsHere)
+            self._paintRefboxes(painter, rect, refsHere, inColumn=inColumn)
 
         painter.restore()
 
@@ -939,7 +986,7 @@ class CommitLogDelegate(QStyledItemDelegate):
             if refsWidth > 0:
                 refRect = QRect(rect)
                 refRect.setWidth(refsWidth)
-                self._paintRefs(painter, index, refRect, oid)
+                self._paintRefs(painter, index, refRect, oid, inColumn=True)
 
             rect.setLeft(rect.left() + refsWidth)
 

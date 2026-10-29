@@ -870,9 +870,9 @@ def testRefBoxesBeforeGraph(tempDir, mainWindow, monkeypatch):
         calls.append(("graph", rect.top(), rect.left()))
         originalPaintGraph(painter, rect, *args, **kwargs)
 
-    def paintRefboxesProxy(delegate, painter, rect, refs):
+    def paintRefboxesProxy(delegate, painter, rect, refs, **kwargs):
         calls.append(("refs", rect.top(), rect.left()))
-        originalPaintRefboxes(delegate, painter, rect, refs)
+        originalPaintRefboxes(delegate, painter, rect, refs, **kwargs)
 
     monkeypatch.setattr(commitlogdelegate, "paintGraphFrame", paintGraphProxy)
     monkeypatch.setattr(CommitLogDelegate, "_paintRefboxes", paintRefboxesProxy)
@@ -912,3 +912,69 @@ def testRefBoxesBeforeGraph(tempDir, mainWindow, monkeypatch):
 
     GFApplication.instance().applyPrefs(refBoxesBeforeGraph=False)
     comparePositions(refsGoFirst=False)
+
+
+def testRefBoxesCollapseMultipleRefs(tempDir, mainWindow):
+    wd = unpackRepo(tempDir)
+    rw = mainWindow.openRepo(wd)
+    QTest.qWait(0)
+    delegate = rw.graphView.clDelegate
+
+    # The current working branch wins over local branches, remotes and tags.
+    primaryRef, collapsedRefs = delegate._arrangeRefs([
+        "refs/tags/v1.0.0",
+        "refs/remotes/origin/master",
+        "refs/heads/other",
+        "refs/heads/master",
+    ])
+    assert primaryRef == "refs/heads/master"
+    assert collapsedRefs == [
+        "refs/heads/other",
+        "refs/remotes/origin/master",
+        "refs/tags/v1.0.0",
+    ]
+
+    # Without the working branch, local branches win over remotes and tags.
+    primaryRef, collapsedRefs = delegate._arrangeRefs([
+        "refs/tags/v1.0.0",
+        "refs/remotes/origin/master",
+        "refs/heads/other",
+    ])
+    assert primaryRef == "refs/heads/other"
+    assert collapsedRefs == ["refs/remotes/origin/master", "refs/tags/v1.0.0"]
+
+    # Each hidden ref gets its own pill in the click bubble.
+    pills = delegate.formatRefPills(collapsedRefs)
+    assert pills.count("<img") == 2
+    assert "refs/remotes/origin/master" in pills
+    assert "refs/tags/v1.0.0" in pills
+
+    # A commit with a local branch and its upstream must collapse into one refbox.
+    oid = Oid(hex="42e4e7c5e507e113ebbb7801b16b52cf867b7ce1")
+    index = rw.graphView.getFilterIndexForCommit(oid)
+    rw.graphView.scrollTo(index)
+    QTest.qWait(0)
+    rw.graphView.viewport().grab()
+
+    sourceRow = rw.graphView.clFilter.mapToSource(index).row()
+    zones = [z for z in rw.graphView.clModel.getToolTipZones(sourceRow)
+             if z.kind == "ref" and z.refs]
+    assert len(zones) == 1
+    zone = zones[0]
+    assert zone.refs == ("refs/remotes/origin/no-parent",)
+    assert zone.right - zone.left > 40, "collapsed refbox should show its name and +N count"
+
+    # Clicking the collapsed refbox shows the hidden refs in a bubble.
+    QToolTip.hideText()
+    waitUntilTrue(lambda: not QToolTip.isVisible())
+    rect = rw.graphView.visualRect(index)
+    clickPos = QPoint((zone.left + zone.right) // 2, rect.center().y())
+    QTest.mouseClick(rw.graphView.viewport(), Qt.MouseButton.LeftButton, pos=clickPos)
+    waitUntilTrue(QToolTip.isVisible)
+    assert "refs/remotes/origin/no-parent" in QToolTip.text()
+    assert "white-space: pre" in QToolTip.text()
+    pillSrc = re.search(r"<img src='([^']+)'", QToolTip.text())
+    assert pillSrc, "collapsed refs should be rendered as pill images"
+    assert os.path.isfile(pillSrc.group(1))
+    QToolTip.hideText()
+    waitUntilTrue(lambda: not QToolTip.isVisible())

@@ -123,6 +123,27 @@ class GraphView(QListView):
         else:
             super().mouseMoveEvent(event)
 
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        super().mouseReleaseEvent(event)
+
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+
+        index = self.indexAt(event.pos())
+        if not index.isValid():
+            return
+
+        # Show refs hidden behind a collapsed refbox in a bubble
+        sourceRow = self.clFilter.mapToSource(index).row()
+        x = event.pos().x()
+        for zone in reversed(self.clModel.getToolTipZones(sourceRow)):
+            if not (zone.left <= x <= zone.right):
+                continue
+            if zone.kind == "ref" and zone.refs:
+                globalPos = self.viewport().mapToGlobal(event.pos())
+                QToolTip.showText(globalPos, self.clDelegate.formatRefPills(zone.refs), self.viewport())
+            break
+
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         currentIndex = self.currentIndex()
         if (not currentIndex.isValid()
