@@ -887,7 +887,10 @@ def testRefBoxesBeforeGraph(tempDir, mainWindow, monkeypatch):
             rows.setdefault(top, {})[kind] = left
 
         comparedRows = 0
+        graphLefts = set()
         for row in rows.values():
+            if "graph" in row:
+                graphLefts.add(row["graph"])
             if "graph" not in row or "refs" not in row:
                 continue
             comparedRows += 1
@@ -897,6 +900,10 @@ def testRefBoxesBeforeGraph(tempDir, mainWindow, monkeypatch):
                 assert row["graph"] < row["refs"]
 
         assert comparedRows > 0
+
+        # The graph must stay aligned regardless of whether a row has refs.
+        assert any("graph" in row and "refs" not in row for row in rows.values())
+        assert len(graphLefts) == 1
 
     comparePositions(refsGoFirst=False)
 

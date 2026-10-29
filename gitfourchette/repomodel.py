@@ -154,6 +154,9 @@ class RepoModel:
     hiddenRefs: set[str]
     "All cached refs that are hidden, either explicitly or via ref patterns."
 
+    hiddenRefsVersion: int
+    "Incremented whenever the set of hidden refs may have changed."
+
     hideSeeds: set[Oid]
     localSeeds: set[Oid]
 
@@ -211,6 +214,7 @@ class RepoModel:
         self.aheadBehind = {}  # filled in outside RepoModel (needs git call)
 
         self.hiddenRefs = set()
+        self.hiddenRefsVersion = 0
         self.hiddenCommits = set()
         self.hideSeeds = set()
         self.localSeeds = set()
@@ -536,6 +540,7 @@ class RepoModel:
         numStalePatterns = 0
 
         assert type(self.hiddenRefs) is set
+        self.hiddenRefsVersion += 1
         self.hiddenRefs.clear()
 
         if showPatterns:

@@ -14,7 +14,7 @@ from gitfourchette.application import GFApplication
 from gitfourchette.forms.searchbar import SearchBar
 from gitfourchette.graphview.commitlogmodel import CommitLogModel, SpecialRow, CommitToolTipZone
 from gitfourchette.graphview.commitinfosearch import CommitInfoSearch
-from gitfourchette.graphview.graphpaint import getGraphFrameWidth, paintGraphFrame
+from gitfourchette.graphview.graphpaint import paintGraphFrame
 from gitfourchette.localization import *
 from gitfourchette.porcelain import *
 from gitfourchette.qt import *
@@ -91,6 +91,8 @@ class CommitLogDelegate(QStyledItemDelegate):
         self.hashCharWidth = 0
         self.dateMaxWidth = 0
         self.authorMaxWidth = 0
+        self.refsColumnWidth = 0
+        self.refsColumnWidthKey = None
         self.activeCommitFont = QFont()
         self.uncommittedFont = QFont()
         self.refboxFont = QFont()
@@ -122,6 +124,7 @@ class CommitLogDelegate(QStyledItemDelegate):
             return
 
         self.mustRefreshMetrics = False
+        self.refsColumnWidthKey = None
 
         self.hashCharWidth = max(option.fontMetrics.horizontalAdvance(c) for c in "0123456789abcdef")
 
@@ -797,6 +800,93 @@ class CommitLogDelegate(QStyledItemDelegate):
 
         rect.setLeft(advanceTo)
 
+    def _getRefsColumnWidth(self) -> int:
+        """Measure the space to reserve for refboxes before the graph.
+
+        The ref column must have the same width on every row, otherwise the
+        graph would be shifted horizontally as soon as a row has refs. Use the
+        widest row as the reference width.
+        """
+
+        repoModel = self.repoModel
+        parent = self.parent()
+        commitDiffAB = getattr(getattr(parent, "clModel", None), "commitDiffAB", None)
+        key = (id(repoModel.refsAt), repoModel.hiddenRefsVersion, repoModel.homeBranch,
+               repoModel.headIsDetached, repoModel.singleRemote, commitDiffAB,
+               bool(self.mounts.mountedCommits))
+        if key != self.refsColumnWidthKey:
+            self.refsColumnWidthKey = key
+            self.refsColumnWidth = self._measureRefsColumnWidth()
+        return self.refsColumnWidth
+
+    def _measureRefsColumnWidth(self) -> int:
+        repoModel = self.repoModel
+        homeBranch = RefPrefix.HEADS + repoModel.homeBranch if repoModel.homeBranch else ""
+
+        width = 0
+        for refs in repoModel.refsAt.values():
+            rowWidth = 0
+            for refName in refs:
+                # Match _paintRefboxes: skip hidden refs (except tags)
+                if (refName in repoModel.hiddenRefs
+                        and refName.startswith("refs/")
+                        and not refName.startswith(RefPrefix.TAGS)):
+                    continue
+                rowWidth += self._measureRefboxWidth(refName, isHome=refName == homeBranch)
+            width = max(width, rowWidth)
+
+        # Special refboxes may appear on any row, even if the commit has no refs
+        parent = self.parent()
+        if getattr(getattr(parent, "clModel", None), "commitDiffAB", None):
+            width = max(width, self._measureRefboxWidth("FAKEREF_COMPAREA"))
+        if self.mounts.mountedCommits:
+            width = max(width, self._measureRefboxWidth("FAKEREF_FUSEMOUNT"))
+
+        return width
+
+    def _measureRefboxWidth(self, refName: str, isHome: bool = False) -> int:
+        """Approximate the width that _paintRefbox will use for a single ref."""
+        if refName == "HEAD" and not self.repoModel.headIsDetached:
+            return 0
+
+        refboxDef = next(d for d in REFBOXES if refName.startswith(d.prefix))
+
+        text = refName if refboxDef.keepPrefix else refName.removeprefix(refboxDef.prefix)
+        iconName = refboxDef.icon
+
+        if refboxDef.prefix == RefPrefix.REMOTES and self.repoModel.singleRemote:
+            text = text.split('/', 1)[-1]
+
+        if isHome:
+            font = self.homeRefboxFont
+            iconName = "git-head"
+        elif refName == "HEAD" and self.repoModel.headIsDetached:
+            text = _("Detached HEAD")
+            font = self.homeRefboxFont
+        else:
+            font = self.refboxFont
+
+        lPadding = 4
+        rPadding = 4
+        iconWidth = 0
+        iconPadding = 0
+        if iconName:
+            lPadding -= 1
+            iconWidth = refboxDef.iconWidth
+            iconPadding = 2
+
+        maxWidth = int(settings.prefs.refBoxMaxWidth)
+        if not text or (iconName and maxWidth == 0):
+            textWidth = -rPadding
+        elif not iconName:
+            # Text-only refboxes aren't capped by the refbox width preference
+            textWidth = math.ceil(QFontMetricsF(font).horizontalAdvance(text))
+        else:
+            textWidth = min(math.ceil(QFontMetricsF(font).horizontalAdvance(text)), maxWidth)
+
+        # Include the gap that _paintRefbox leaves after each box
+        return lPadding + iconWidth + iconPadding + textWidth + rPadding + 6
+
     def _paintRefs(
             self,
             painter: QPainter,
@@ -843,19 +933,15 @@ class CommitLogDelegate(QStyledItemDelegate):
 
         # ------ Begin refboxes (if requested before the graph)
         if refsBeforeGraph:
-            refRect = QRect(rect)
+            # Reserve the same width on every row to keep the graph aligned.
+            refsWidth = min(self._getRefsColumnWidth(), rect.width())
 
-            if drawGraph:
-                # Keep enough room for the graph if there are many refs on this row.
-                graphWidth = getGraphFrameWidth(oid, self.repoModel.graph, self.repoModel.hiddenCommits)
-                maxRefsWidth = max(0, refRect.width() - graphWidth - 2)
-                refRect.setRight(refRect.left() + maxRefsWidth)
-            else:
-                maxRefsWidth = refRect.width()
-
-            if maxRefsWidth > 0:
+            if refsWidth > 0:
+                refRect = QRect(rect)
+                refRect.setWidth(refsWidth)
                 self._paintRefs(painter, index, refRect, oid)
-                rect.setLeft(refRect.left())
+
+            rect.setLeft(rect.left() + refsWidth)
 
         # ------ Graph
         if drawGraph:
