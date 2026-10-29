@@ -14,7 +14,7 @@ from gitfourchette.application import GFApplication
 from gitfourchette.forms.searchbar import SearchBar
 from gitfourchette.graphview.commitlogmodel import CommitLogModel, SpecialRow, CommitToolTipZone
 from gitfourchette.graphview.commitinfosearch import CommitInfoSearch
-from gitfourchette.graphview.graphpaint import paintGraphFrame
+from gitfourchette.graphview.graphpaint import getGraphFrameWidth, paintGraphFrame
 from gitfourchette.localization import *
 from gitfourchette.porcelain import *
 from gitfourchette.qt import *
@@ -797,26 +797,13 @@ class CommitLogDelegate(QStyledItemDelegate):
 
         rect.setLeft(advanceTo)
 
-    def paintPrivate(
+    def _paintRefs(
             self,
             painter: QPainter,
-            option: QStyleOptionViewItem,
             index: QModelIndex,
             rect: QRect,
             oid: Oid | None,
     ):
-        """
-        Draw widget-specific information inbetween the commit hash and message.
-        By default, draws the graph and refboxes. Can be overridden.
-        """
-
-        # ------ Graph
-        if oid is not None and not self.repoModel.commitPathspecFilter.wantFilter():
-            graphRect = QRect(rect)
-            paintGraphFrame(painter, graphRect, oid, self.repoModel.graph, self.repoModel.hiddenCommits)
-            rect.setLeft(graphRect.right() + 2)
-
-        # ------ Begin refboxes
         painter.save()
         painter.setClipRect(rect)
 
@@ -836,6 +823,46 @@ class CommitLogDelegate(QStyledItemDelegate):
         if refsHere:
             self._paintRefboxes(painter, rect, refsHere)
 
-        # ------ End refboxes
         painter.restore()
 
+    def paintPrivate(
+            self,
+            painter: QPainter,
+            option: QStyleOptionViewItem,
+            index: QModelIndex,
+            rect: QRect,
+            oid: Oid | None,
+    ):
+        """
+        Draw widget-specific information inbetween the commit hash and message.
+        By default, draws the graph and refboxes. Can be overridden.
+        """
+
+        drawGraph = oid is not None and not self.repoModel.commitPathspecFilter.wantFilter()
+        refsBeforeGraph = settings.prefs.refBoxesBeforeGraph
+
+        # ------ Begin refboxes (if requested before the graph)
+        if refsBeforeGraph:
+            refRect = QRect(rect)
+
+            if drawGraph:
+                # Keep enough room for the graph if there are many refs on this row.
+                graphWidth = getGraphFrameWidth(oid, self.repoModel.graph, self.repoModel.hiddenCommits)
+                maxRefsWidth = max(0, refRect.width() - graphWidth - 2)
+                refRect.setRight(refRect.left() + maxRefsWidth)
+            else:
+                maxRefsWidth = refRect.width()
+
+            if maxRefsWidth > 0:
+                self._paintRefs(painter, index, refRect, oid)
+                rect.setLeft(refRect.left())
+
+        # ------ Graph
+        if drawGraph:
+            graphRect = QRect(rect)
+            paintGraphFrame(painter, graphRect, oid, self.repoModel.graph, self.repoModel.hiddenCommits)
+            rect.setLeft(graphRect.right() + 2)
+
+        # ------ Begin refboxes (default: after the graph)
+        if not refsBeforeGraph:
+            self._paintRefs(painter, index, rect, oid)

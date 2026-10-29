@@ -446,6 +446,8 @@ def _prefKeyTable() -> dict[str, str]:
         ),
         "hashesBesideGraph": _("Show commit hashes beside the graph"),
         "hashesBesideGraph_help": _("You can customize how many characters to show in {0}.", tquo(_p("Prefs", "Advanced"))),
+        "refBoxesBeforeGraph": _("Show ref indicators before the graph"),
+        "refBoxesBeforeGraph_help": _("Display tags and branch names to the left of the commit graph."),
         "maxCommits": _("Load up to # commits in the history"),
         "maxCommits_help": _("Set to 0 to always load the full commit history."),
         "alternatingRowColors": _("Draw rows using alternating background colors"),

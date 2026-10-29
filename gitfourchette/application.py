@@ -460,6 +460,9 @@ class GFApplication(QApplication):
     def _applyPrefs(self, prefDiff: dict[str, Any], writeNow=False):
         from gitfourchette.settings import prefs
 
+        # Accept shorthand spellings for certain preference keys
+        prefDiff = {prefs.normalizePrefKey(k): v for k, v in prefDiff.items()}
+
         # Reset "don't show again" dialogs
         if prefDiff.get("resetDontShowAgain", False):
             prefDiff["resetDontShowAgain"] = False

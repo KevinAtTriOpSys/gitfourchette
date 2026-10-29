@@ -74,6 +74,21 @@ def getCommitBulletColumn(
     return myLanePosition, columnCount
 
 
+def getGraphFrameWidth(oid: Oid, graph: Graph, hiddenCommits: Set[Oid]) -> int:
+    """Measure the horizontal space that paintGraphFrame will use for a commit."""
+    try:
+        myRow = graph.getCommitRow(oid)
+    except LookupError:  # pragma: no cover
+        return 0
+
+    frame = graph.getFrame(myRow)
+    laneColumnsAB, numFlattenedColumns = flattenLanes(frame, hiddenCommits)
+    _myColumn, numFlattenedColumns = getCommitBulletColumn(
+        frame.homeLane(), numFlattenedColumns, laneColumnsAB)
+
+    return LANE_WIDTH // 2 + numFlattenedColumns * LANE_WIDTH
+
+
 def paintGraphFrame(
         painter: QPainter,
         rect: QRect,

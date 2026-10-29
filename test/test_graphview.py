@@ -853,3 +853,55 @@ def testHideCommitHashes(tempDir, mainWindow, monkeypatch):
     n3 = paintHashSpy.completeCalls
 
     assert n3 >= n2 == n1 >= 1
+
+
+def testRefBoxesBeforeGraph(tempDir, mainWindow, monkeypatch):
+    from gitfourchette.graphview import commitlogdelegate
+
+    wd = unpackRepo(tempDir)
+    rw = mainWindow.openRepo(wd)
+    QTest.qWait(0)
+
+    originalPaintGraph = commitlogdelegate.paintGraphFrame
+    originalPaintRefboxes = CommitLogDelegate._paintRefboxes
+    calls: list[tuple[str, int, int]] = []
+
+    def paintGraphProxy(painter, rect, *args, **kwargs):
+        calls.append(("graph", rect.top(), rect.left()))
+        originalPaintGraph(painter, rect, *args, **kwargs)
+
+    def paintRefboxesProxy(delegate, painter, rect, refs):
+        calls.append(("refs", rect.top(), rect.left()))
+        originalPaintRefboxes(delegate, painter, rect, refs)
+
+    monkeypatch.setattr(commitlogdelegate, "paintGraphFrame", paintGraphProxy)
+    monkeypatch.setattr(CommitLogDelegate, "_paintRefboxes", paintRefboxesProxy)
+
+    def comparePositions(refsGoFirst: bool):
+        calls.clear()
+        rw.graphView.viewport().grab()
+        QTest.qWait(0)
+
+        rows: dict[int, dict[str, int]] = {}
+        for kind, top, left in calls:
+            rows.setdefault(top, {})[kind] = left
+
+        comparedRows = 0
+        for row in rows.values():
+            if "graph" not in row or "refs" not in row:
+                continue
+            comparedRows += 1
+            if refsGoFirst:
+                assert row["refs"] < row["graph"]
+            else:
+                assert row["graph"] < row["refs"]
+
+        assert comparedRows > 0
+
+    comparePositions(refsGoFirst=False)
+
+    GFApplication.instance().applyPrefs(refBoxesBeforeGraph=True)
+    comparePositions(refsGoFirst=True)
+
+    GFApplication.instance().applyPrefs(refBoxesBeforeGraph=False)
+    comparePositions(refsGoFirst=False)

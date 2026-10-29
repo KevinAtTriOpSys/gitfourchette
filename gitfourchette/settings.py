@@ -104,6 +104,14 @@ class WhitespaceMode(enum.StrEnum):
 class Prefs(PrefsFile):
     _filename = "prefs.json"
 
+    _prefAliases: ClassVar[dict[str, str]] = {
+        "refBeforeGraph": "refBoxesBeforeGraph",
+        "refBoxBeforeGraph": "refBoxesBeforeGraph",
+        "refsBeforeGraph": "refBoxesBeforeGraph",
+        "refboxesBeforeGraph": "refBoxesBeforeGraph",
+    }
+    "Shorthand spellings accepted for certain preference keys."
+
     _category_general           : int                   = 0
     language                    : str                   = ""
     qtStyle                     : str                   = ""
@@ -138,6 +146,7 @@ class Prefs(PrefsFile):
     shortTimeFormat             : str                   = SHORT_DATE_DEFAULT_PRESET
     maxCommits                  : int                   = 10000
     hashesBesideGraph           : bool                  = True
+    refBoxesBeforeGraph         : bool                  = False
     authorDiffAsterisk          : bool                  = True
     verifyGpgOnTheFly           : bool                  = False
     alternatingRowColors        : bool                  = False
@@ -204,6 +213,21 @@ class Prefs(PrefsFile):
     refSortClearTimestamp       : int                   = 0
     rebaseBottomUp              : bool                  = True
     rebaseDateArg               : str                   = ""
+
+    @classmethod
+    def normalizePrefKey(cls, key: str) -> str:
+        return cls._prefAliases.get(key, key)
+
+    def __getattr__(self, key: str):
+        try:
+            alias = type(self)._prefAliases[key]
+        except KeyError:
+            raise AttributeError(key) from None
+        return getattr(self, alias)
+
+    def __setattr__(self, key: str, value):
+        key = type(self)._prefAliases.get(key, key)
+        super().__setattr__(key, value)
 
     @property
     def listViewScrollMode(self) -> QAbstractItemView.ScrollMode:
